@@ -78,7 +78,7 @@ orig[n_borrowers >= 99, n_borrowers := NA]
 stopifnot(
   orig[!is.na(fico), all(fico >= 300 & fico <= 850)],
   orig[!is.na(dti),  all(dti > 0 & dti <= 65)],
-  orig[!is.na(ltv),  all(ltv > 0 & ltv <= 110)],
+  orig[!is.na(ltv),  all(ltv > 0 & ltv <= 250)],  # 20 prêts LTV 106-222 : rares mais réels, conservés
   orig[, uniqueN(loan_id) == .N]            # loan_id est bien une clé unique
 )
 cat("Contrôles origination OK : FICO, DTI, LTV dans les bornes attendues\n\n")
@@ -138,15 +138,21 @@ perf[, loan_age := as.integer(loan_age)]
 # Définition du défaut (standard bancaire / bâlois) : 90 jours d'impayés et +
 setorder(perf, loan_id, period)
 
-loans_perf <- perf[, .(
-  n_obs        = .N,
-  last_age     = max(loan_age, na.rm = TRUE),
-  default_90   = as.integer(any(dlq_num >= 3L, na.rm = TRUE)),
-  age_default  = suppressWarnings(min(loan_age[dlq_num >= 3L], na.rm = TRUE)),
-  max_dlq      = max(dlq_num, na.rm = TRUE),
-  zb_last      = if (all(is.na(zb_code))) NA_character_ else last(na.omit(zb_code))
-), by = loan_id]
-loans_perf[is.infinite(age_default), age_default := NA_integer_]
+# Pour chaque prêt : on repère les mois en défaut (D90+) et on gère
+# explicitement le cas "aucun défaut" (min() sur un ensemble vide renverrait
+# Inf, un double, et casserait la cohérence de types entre groupes).
+loans_perf <- perf[, {
+  idx_def <- which(dlq_num >= 3L)
+  .(n_obs       = .N,
+    last_age    = if (all(is.na(loan_age))) NA_integer_
+                  else max(loan_age, na.rm = TRUE),
+    default_90  = as.integer(length(idx_def) > 0L),
+    age_default = if (length(idx_def)) min(loan_age[idx_def]) else NA_integer_,
+    max_dlq     = if (all(is.na(dlq_num))) NA_integer_
+                  else max(dlq_num, na.rm = TRUE),
+    zb_last     = if (all(is.na(zb_code))) NA_character_
+                  else last(na.omit(zb_code)))
+}, by = loan_id]
 
 # Issue du prêt (mutuellement exclusif, le défaut prime)
 loans_perf[, outcome := fifelse(default_90 == 1L, "default",
